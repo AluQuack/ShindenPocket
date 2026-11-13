@@ -848,7 +848,6 @@ private fun SeriesCharactersCard(
 @Composable
 internal fun SeriesEpisodesDashboardCard(
     seriesInfo: SeasonSeriesInfo?,
-    stats: List<Pair<String, String>>,
     filters: List<Pair<String, Int>>,
     selectedFilter: Int,
     onSelectFilter: (Int) -> Unit,
@@ -1030,44 +1029,6 @@ internal fun SeriesEpisodesDashboardCard(
             }
 
             
-            if (stats.isNotEmpty()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    stats.forEach { (label, value) ->
-                        Surface(
-                            modifier = Modifier.weight(1f),
-                            color = PocketPalette.surfaceRaised.copy(alpha = 0.85f),
-                            shape = RoundedCornerShape(8.dp),
-                            border = BorderStroke(1.dp, PocketPalette.outlineVariant)
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 7.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(1.dp)
-                            ) {
-                                Text(
-                                    text = value,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = Color.White,
-                                    maxLines = 1
-                                )
-                                Text(
-                                    text = label,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontSize = 10.sp,
-                                    color = PocketPalette.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
             // Filtry `.sh-tp` pozostają w jednym rzędzie.
             if (filters.isNotEmpty()) {
                 Row(

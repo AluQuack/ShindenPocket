@@ -580,12 +580,6 @@ fun AnimeDetails(
                                 )
                                 SeriesEpisodesDashboardCard(
                                     seriesInfo = seriesInfo,
-                                    stats = listOf(
-                                        "W katalogu" to current.items.size.toString(),
-                                        "Online" to current.withOnlineVersion.toString(),
-                                        "Do obejrzenia" to current.availableUnwatched.toString(),
-                                        "Obejrzane" to current.watched.toString()
-                                    ),
                                     filters = filterItems,
                                     selectedFilter = filter,
                                     onSelectFilter = { filter = it },
@@ -875,5 +869,4 @@ fun AnimeDetails(
         )
     }
 }
-
 

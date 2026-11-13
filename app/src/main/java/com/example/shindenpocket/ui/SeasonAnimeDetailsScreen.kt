@@ -227,16 +227,8 @@ internal fun SeasonAnimeDetailsScreen(
                             add("Zapowiedziane" to upcomingCount)
                         }
                     }
-                    val statItems = buildList {
-                        add("W katalogu" to ordered.size.toString())
-                        add("Online" to onlineCount.toString())
-                        if (upcomingCount > 0) {
-                            add("Zapowiedziane" to upcomingCount.toString())
-                        }
-                    }
                     SeriesEpisodesDashboardCard(
                         seriesInfo = info,
-                        stats = statItems,
                         filters = filterItems,
                         selectedFilter = filter,
                         onSelectFilter = { filter = it },
