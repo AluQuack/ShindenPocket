@@ -39,10 +39,12 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.example.shindenpocket.data.Anime
+import com.example.shindenpocket.data.AppUpdateManager
 import com.example.shindenpocket.data.EpisodeBackgroundScheduler
 import com.example.shindenpocket.data.PlaybackPreferences
 import com.example.shindenpocket.data.ShindenAuth
@@ -66,6 +68,7 @@ fun LoginScreen(
     library: List<Anime> = emptyList()
 ) {
     val context = LocalContext.current
+    val appVersion = remember(context) { AppUpdateManager.currentVersion(context) }
     val scheme = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
     var username by rememberSaveable { mutableStateOf("") }
@@ -589,6 +592,13 @@ fun LoginScreen(
                             ) {
                                 Text("Repozytorium GitHub ↗", color = PocketPalette.primarySoft)
                             }
+                            Text(
+                                "Aktualna wersja: $appVersion",
+                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                                color = scheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall,
+                                textAlign = TextAlign.Center
+                            )
                         }
                     }
                 }

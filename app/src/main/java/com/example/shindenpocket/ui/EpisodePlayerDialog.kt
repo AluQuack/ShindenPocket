@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
+import android.os.Build
 import android.graphics.Bitmap
 import android.graphics.Color as AndroidColor
 import android.net.Uri
@@ -84,13 +85,24 @@ import com.example.shindenpocket.data.EpisodeSource
 import com.example.shindenpocket.data.PlaybackPreferences
 import com.example.shindenpocket.data.ShindenAuth
 import java.util.Locale
+import java.io.ByteArrayInputStream
 
 private val episodePathRegex = Regex("/(?:episode|epek)/[0-9]+(?:-[a-z0-9-]+)?/view/[0-9]+/?")
 
+// Oddzielna walidacja adresów odtwarzacza; nie ufamy samemu końcowi nazwy hosta.
+private fun isTrustedPlayerOrigin(uri: Uri?): Boolean =
+    uri != null &&
+        uri.scheme.equals("https", ignoreCase = true) &&
+        uri.host.equals("shinden.pl", ignoreCase = true) &&
+        (uri.port == -1 || uri.port == 443) &&
+        uri.userInfo == null
+
+private fun deniedWebResponse(): WebResourceResponse =
+    WebResourceResponse("text/plain", "UTF-8", ByteArrayInputStream(ByteArray(0)))
+
 internal fun isValidShindenEpisodeUrl(episodeUrl: String): Boolean {
     val uri = Uri.parse(episodeUrl)
-    return uri.scheme == "https" &&
-            uri.host == "shinden.pl" &&
+    return isTrustedPlayerOrigin(uri) &&
             uri.path.orEmpty().matches(episodePathRegex) &&
             uri.query == null &&
             uri.fragment == null
@@ -359,7 +371,9 @@ internal fun EpisodePlayerDialog(
                                     val browser = frame.getChildAt(0) as? WebView
                                     if (frame.tag != compact) {
                                         frame.tag = compact
-                                        browser?.evaluateJavascript(pocketScript(compact), null)
+                                        if (browser != null && isTrustedPlayerOrigin(Uri.parse(browser.url.orEmpty()))) {
+                                            browser.evaluateJavascript(pocketScript(compact), null)
+                                        }
                                         if (!compact && browser != null) {
                                             val chrome = browser.webChromeClient as? PocketPlayerChromeClient
                                             if (chrome?.isFullscreen != true) {
@@ -486,6 +500,11 @@ private fun createPlayerView(
         settings.domStorageEnabled = true
         settings.allowFileAccess = false
         settings.allowContentAccess = false
+        settings.allowFileAccessFromFileURLs = false
+        settings.allowUniversalAccessFromFileURLs = false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            settings.safeBrowsingEnabled = true
+        }
         settings.javaScriptCanOpenWindowsAutomatically = false
         settings.setSupportMultipleWindows(false)
         settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
@@ -536,7 +555,8 @@ private fun installDocumentStartScripts(browser: WebView): Boolean {
         return false
     }
     return try {
-        WebViewCompat.addDocumentStartJavaScript(browser, antiAdblockScript, setOf("*"))
+        // Skrypt startowy tylko na Shinden; nigdy w iframe zewnętrznego hostingu.
+        WebViewCompat.addDocumentStartJavaScript(browser, antiAdblockScript, setOf("https://shinden.pl"))
         true
     } catch (_: Exception) {
         false
@@ -565,10 +585,8 @@ private class PocketPlayerWebViewClient(
         errorResponse: WebResourceResponse
     ) {
         if (errorResponse.statusCode >= 400 && request.isForMainFrame) {
-            android.util.Log.w(
-                "PP",
-                "HTTP ${errorResponse.statusCode} ${request.url} main=${request.isForMainFrame}"
-            )
+            // Adres może zawierać token w query string: nie zapisuj go w Logcat.
+            android.util.Log.w("PP", "Odtwarzacz: HTTP ${errorResponse.statusCode}")
         }
     }
 
@@ -576,6 +594,13 @@ private class PocketPlayerWebViewClient(
         view: WebView,
         request: WebResourceRequest
     ): WebResourceResponse? {
+        if (request.isForMainFrame && !isTrustedPlayerOrigin(request.url)) {
+            return deniedWebResponse()
+        }
+        // Do odtwarzania dopuszczamy zewnętrzne HTTPS, ale nigdy HTTP.
+        if (request.url.scheme.equals("http", ignoreCase = true)) {
+            return deniedWebResponse()
+        }
         shouldInterceptAdRequest(request)?.let { return it }
         return super.shouldInterceptRequest(view, request)
     }
@@ -590,20 +615,21 @@ private class PocketPlayerWebViewClient(
             return isAdHost(host)
         }
 
-        return !(scheme == "https" && (host == "shinden.pl" || host.endsWith(".shinden.pl")))
+        return !isTrustedPlayerOrigin(request.url)
     }
 
     override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
         super.onPageStarted(view, url, favicon)
-        if (disposed || documentStartInstalled || url == null) return
+        if (disposed || documentStartInstalled || url == null ||
+            !isTrustedPlayerOrigin(Uri.parse(url))
+        ) return
         view.evaluateJavascript(antiAdblockScript, null)
     }
 
     override fun onPageFinished(view: WebView, url: String) {
         super.onPageFinished(view, url)
         if (disposed) return
-        val host = Uri.parse(url).host?.lowercase(Locale.ROOT).orEmpty()
-        if (host == "shinden.pl" || host.endsWith(".shinden.pl")) {
+        if (isTrustedPlayerOrigin(Uri.parse(url))) {
             if (!documentStartInstalled) {
                 view.evaluateJavascript(antiAdblockScript, null)
             }

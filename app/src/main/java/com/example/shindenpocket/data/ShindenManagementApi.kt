@@ -7,6 +7,7 @@ import org.jsoup.nodes.Element
 import org.json.JSONObject
 import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.URI
 import java.net.ProtocolException
 import java.net.URL
 import kotlin.math.roundToInt
@@ -124,11 +125,12 @@ data class AnimeComment(
     val parentId: Long? = null,
     val isLocalOnly: Boolean = false
 ) {
+    // Zachowujemy drugi parametr dla zgodności z istniejącymi wywołaniami.
+    // Nazwa użytkownika nie stanowi dowodu własności komentarza.
+    @Suppress("UNUSED_PARAMETER")
     fun isOwnedBy(userId: Int?, username: String?): Boolean {
         if (isLocalOnly) return true
-        if (userId != null && userId > 0 && authorId == userId) return true
-        if (!username.isNullOrBlank() && authorName.equals(username.trim(), ignoreCase = true)) return true
-        return false
+        return userId != null && userId > 0 && authorId > 0 && authorId == userId
     }
 }
 
@@ -142,6 +144,7 @@ object ShindenManagementApi {
     private const val V1_BASE = "${ShindenUrls.BASE}/v1"
     private const val USER_AGENT =
         "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+    private val REDIRECT_CODES = setOf(301, 302, 303, 307, 308)
 
     suspend fun fetchListEntry(titleId: Int): RemoteListEntry? = withContext(Dispatchers.IO) {
         val (code, text) = executeV1Request(
@@ -149,7 +152,8 @@ object ShindenManagementApi {
             path = "/me/list/anime/$titleId",
             refererPath = "/titles/$titleId"
         )
-        if (code == 404 || code == 401) return@withContext null
+        if (code == 404) return@withContext null
+        // Nie myl wygasłej sesji z brakiem pozycji na liście.
         if (code !in 200..299 || text.isBlank()) {
             throw IOException(extractErrorMessage(code, text))
         }
@@ -185,7 +189,7 @@ object ShindenManagementApi {
             path = "/me/list/anime/$titleId",
             body = payload.toString(),
             refererPath = "/titles/$titleId",
-            extraCookie = "sh_lv=${System.currentTimeMillis()}"
+            shLv = System.currentTimeMillis()
         )
         if (code !in 200..299) {
             throw IOException(extractErrorMessage(code, text))
@@ -212,7 +216,7 @@ object ShindenManagementApi {
             method = "DELETE",
             path = "/me/list/series/$titleId",
             refererPath = "/titles/$titleId",
-            extraCookie = "sh_lv=${System.currentTimeMillis()}"
+            shLv = System.currentTimeMillis()
         )
         code in 200..299 || code == 404
     }
@@ -393,6 +397,30 @@ object ShindenManagementApi {
         )
     }
 
+    /** Odrzuć HTTP, lokalne nazwy hostów i literalne adresy IP avatarów. */
+    private fun trustedAvatarUrl(raw: String): String? {
+        if (raw.isBlank()) return null
+        val url = when {
+            raw.startsWith("//") -> "https:$raw"
+            raw.startsWith("http://", ignoreCase = true) -> return null
+            raw.startsWith("https://", ignoreCase = true) -> raw
+            raw.startsWith("/") -> "${ShindenUrls.BASE}$raw"
+            else -> "${ShindenUrls.BASE}/$raw"
+        }
+        return try {
+            val uri = URI(url)
+            val host = uri.host?.lowercase() ?: return null
+            if (uri.scheme != "https" || uri.rawUserInfo != null ||
+                (uri.port != -1 && uri.port != 443) ||
+                host == "localhost" || host.endsWith(".localhost") ||
+                host.endsWith(".local") || host.contains(':') ||
+                host.matches(Regex("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}"))
+            ) null else uri.toASCIIString()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun parseSingleCommentElement(
         el: Element,
         animeId: Int,
@@ -412,13 +440,7 @@ object ShindenManagementApi {
         val avatarImg = el.selectFirst(".sh-c-avatar img")
         val avatarSrc = sequenceOf(avatarImg?.attr("src"), avatarImg?.attr("data-src"))
             .firstOrNull { !it.isNullOrBlank() }?.trim().orEmpty()
-        val avatarUrl = when {
-            avatarSrc.isBlank() -> null
-            avatarSrc.startsWith("http://") || avatarSrc.startsWith("https://") -> avatarSrc
-            avatarSrc.startsWith("//") -> "https:$avatarSrc"
-            avatarSrc.startsWith("/") -> "${ShindenUrls.BASE}$avatarSrc"
-            else -> "${ShindenUrls.BASE}/$avatarSrc"
-        }
+        val avatarUrl = trustedAvatarUrl(avatarSrc)
 
         val bodyEl = el.selectFirst(".sh-c-body")?.clone()
         val bodyText = if (bodyEl != null) {
@@ -463,52 +485,83 @@ object ShindenManagementApi {
         path: String,
         body: String? = null,
         refererPath: String = "/",
-        extraCookie: String? = null,
+        shLv: Long? = null,
         retriedAuth: Boolean = false
     ): Pair<Int, String> {
-        val url = URL("$V1_BASE$path")
-        val conn = (url.openConnection() as HttpURLConnection).apply {
-            connectTimeout = 15000
-            readTimeout = 15000
-            instanceFollowRedirects = true
-            setHttpMethod(this, method)
-            setRequestProperty("Accept", "application/json")
-            setRequestProperty("Accept-Language", "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7")
-            setRequestProperty("User-Agent", USER_AGENT)
-            setRequestProperty("Origin", ShindenUrls.BASE)
-            setRequestProperty("Referer", "${ShindenUrls.BASE}$refererPath")
-            ShindenAuth.attachSessionCookies(this, extraCookie)
-            ShindenAuth.attachV1Auth(this, forceRefresh = retriedAuth)
-            if (body != null) {
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json")
-            }
-        }
-        return try {
-            if (body != null) {
-                conn.outputStream.use { out ->
-                    out.write(body.toByteArray(Charsets.UTF_8))
+        var currentUrl = URL("$V1_BASE$path")
+        var currentMethod = method
+        var currentBody = body
+        if (shLv != null) ShindenAuth.setShLvCookie(currentUrl, shLv)
+
+        repeat(5) {
+            val conn = ShindenAuth.openConnection(currentUrl).apply {
+                connectTimeout = 15000
+                readTimeout = 15000
+                instanceFollowRedirects = false
+                setHttpMethod(this, currentMethod)
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("Accept-Language", "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7")
+                setRequestProperty("User-Agent", USER_AGENT)
+                setRequestProperty("Origin", ShindenUrls.BASE)
+                setRequestProperty("Referer", "${ShindenUrls.BASE}$refererPath")
+                ShindenAuth.attachV1Auth(this, forceRefresh = retriedAuth)
+                if (currentBody != null) {
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json")
                 }
             }
-            val code = conn.responseCode
-            if (code == 401 && !retriedAuth) {
+            try {
+                currentBody?.let { requestBody ->
+                    conn.outputStream.use { out ->
+                        out.write(requestBody.toByteArray(Charsets.UTF_8))
+                    }
+                }
+
+                val code = conn.responseCode
+                if (code in REDIRECT_CODES) {
+                    val next = ShindenHttpSecurity.resolveRedirect(
+                        currentUrl,
+                        conn.getHeaderField("Location").orEmpty()
+                    )
+                    when (code) {
+                        307, 308 -> Unit
+                        303 -> {
+                            currentMethod = "GET"
+                            currentBody = null
+                        }
+                        301, 302 -> {
+                            if (currentMethod != "GET" && currentMethod != "HEAD") {
+                                val text = conn.errorStream
+                                    ?.bufferedReader(Charsets.UTF_8)
+                                    ?.use { it.readText() }
+                                    .orEmpty()
+                                return code to text
+                            }
+                        }
+                    }
+                    currentUrl = next
+                    return@repeat
+                }
+
+                if (code == 401 && !retriedAuth) {
+                    ShindenAuth.invalidateV1Token()
+                    return executeV1Request(
+                        method = method,
+                        path = path,
+                        body = body,
+                        refererPath = refererPath,
+                        shLv = shLv,
+                        retriedAuth = true
+                    )
+                }
+                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+                val responseText = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+                return code to responseText
+            } finally {
                 conn.disconnect()
-                ShindenAuth.invalidateV1Token()
-                return executeV1Request(
-                    method = method,
-                    path = path,
-                    body = body,
-                    refererPath = refererPath,
-                    extraCookie = extraCookie,
-                    retriedAuth = true
-                )
             }
-            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-            val responseText = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-            code to responseText
-        } finally {
-            conn.disconnect()
         }
+        throw IOException("Zbyt wiele przekierowań API Shinden")
     }
 
     // shortcut: HttpURLConnection nie obsługuje PATCH przez setRequestMethod; po zmianie klienta HTTP usuń refleksję.
@@ -549,9 +602,8 @@ object ShindenManagementApi {
 
     private fun fetchCommentsFragmentHtml(startUrl: String, referer: String): String {
         var current = URL(startUrl)
-        var extraCookie: String? = null
         repeat(4) {
-            val conn = (current.openConnection() as HttpURLConnection).apply {
+            val conn = ShindenAuth.openConnection(current).apply {
                 instanceFollowRedirects = false
                 requestMethod = "GET"
                 connectTimeout = 15000
@@ -560,25 +612,15 @@ object ShindenManagementApi {
                 setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
                 setRequestProperty("Accept-Language", "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7")
                 setRequestProperty("Referer", referer)
-                ShindenAuth.attachSessionCookies(this, extraCookie)
             }
             try {
                 val code = conn.responseCode
-                if (code in listOf(301, 302, 303, 307, 308)) {
-                    val loc = conn.getHeaderField("Location")?.trim().orEmpty()
-                    val setCookie = conn.headerFields["Set-Cookie"]
-                        ?.mapNotNull { it.substringBefore(';').trim().takeIf(String::isNotBlank) }
-                        ?.joinToString("; ")
-                    if (!setCookie.isNullOrBlank()) extraCookie = setCookie
-                    if (loc.isNotBlank()) {
-                        val next = URL(current, loc)
-                        if (next.protocol == "https" &&
-                            (next.host.equals(ShindenUrls.HOST, true) || next.host.endsWith(".${ShindenUrls.HOST}", true))
-                        ) {
-                            current = next
-                            return@repeat
-                        }
-                    }
+                if (code in REDIRECT_CODES) {
+                    current = ShindenHttpSecurity.resolveRedirect(
+                        current,
+                        conn.getHeaderField("Location").orEmpty()
+                    )
+                    return@repeat
                 }
                 if (code !in 200..299) throw IOException("HTTP $code")
                 return conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }

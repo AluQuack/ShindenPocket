@@ -121,7 +121,7 @@ class ShindenManagementTest {
         assertNull(root.parentId)
         assertEquals("Świetna fabuła!\nPolecam każdemu.", root.body)
         assertTrue(root.isOwnedBy(userId = 42, username = "InnyNick"))
-        assertTrue(root.isOwnedBy(userId = null, username = "testerpl"))
+        assertFalse(root.isOwnedBy(userId = null, username = "testerpl"))
         assertFalse(root.isOwnedBy(userId = 99, username = "KtośInny"))
 
         val reply = page.comments[1]

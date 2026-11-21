@@ -22,6 +22,20 @@ internal object SecureSessionStore {
     private const val KEY_ALIAS = "shinden_pocket_session_v1"
     private const val FILE_NAME = "shinden_session_v1.bin"
     private const val TRANSFORMATION = "AES/GCM/NoPadding"
+    private const val MAX_SESSION_FILE_BYTES = 256 * 1024
+
+    // Defense in depth: nie zapisujemy ciastek spoza głównego hosta Shinden.
+    private fun isAllowedCookie(cookie: HttpCookie): Boolean {
+        val domain = cookie.domain.orEmpty().trimStart('.')
+        val path = cookie.path ?: "/"
+        return !cookie.hasExpired() &&
+            (domain.isBlank() || domain.equals("shinden.pl", ignoreCase = true)) &&
+            cookie.name.matches(Regex("[A-Za-z0-9_-]{1,64}")) &&
+            cookie.value.length <= 8192 &&
+            cookie.value.none { it == '\r' || it == '\n' || it == ';' } &&
+            path.startsWith('/') && path.length <= 256 &&
+            path.none { it == '\r' || it == '\n' || it == ';' }
+    }
 
     private fun sessionFile(context: Context): File =
         File(context.applicationContext.noBackupFilesDir, FILE_NAME)
@@ -55,7 +69,7 @@ internal object SecureSessionStore {
         val now = System.currentTimeMillis()
         val items = JSONArray()
 
-        cookies.filter { !it.hasExpired() }.forEach { cookie ->
+        cookies.filter(::isAllowedCookie).forEach { cookie ->
             val expiry = if (cookie.maxAge < 0) {
                 -1L
             } else {
@@ -81,6 +95,9 @@ internal object SecureSessionStore {
 
         // Układ pliku: długość IV (1 bajt), IV, zaszyfrowane dane + tag GCM.
         val bytes = byteArrayOf(cipher.iv.size.toByte()) + cipher.iv + encrypted
+        if (bytes.size > MAX_SESSION_FILE_BYTES) {
+            throw IllegalArgumentException("Zbyt duża sesja Shinden.")
+        }
         val outputFile = sessionFile(context)
         val tempFile = File(outputFile.parentFile, "$FILE_NAME.tmp")
         tempFile.writeBytes(bytes)
@@ -96,6 +113,9 @@ internal object SecureSessionStore {
         if (!file.exists()) return emptyList()
 
         return try {
+            if (file.length() > MAX_SESSION_FILE_BYTES) {
+                throw IllegalArgumentException("Zbyt duży plik sesji")
+            }
             val bytes = file.readBytes()
             if (bytes.size < 30) throw IllegalArgumentException("Niepoprawny plik sesji")
 
@@ -141,7 +161,7 @@ internal object SecureSessionStore {
                     ((expiresAt - now) / 1000).coerceAtLeast(1)
                 }
 
-                result.add(cookie)
+                if (isAllowedCookie(cookie)) result.add(cookie)
             }
             result
         } catch (e: Exception) {
