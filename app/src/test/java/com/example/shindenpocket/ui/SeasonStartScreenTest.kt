@@ -38,4 +38,41 @@ class SeasonStartScreenTest {
             )
         )
     }
+
+    @Test
+    fun discoveredLatestPeriod_doesNotRegressWhenReturningThroughOlderSeasons() {
+        assertEquals(
+            SeasonPeriod(2028, "autumn"),
+            laterSeasonPeriod(
+                knownPeriod = SeasonPeriod(2028, "autumn"),
+                discoveredPeriod = SeasonPeriod(2026, "autumn")
+            )
+        )
+    }
+
+    @Test
+    fun catalogScrollsToEndOnlyWhenNextSeasonIsShorterOrEmpty() {
+        assertTrue(shouldScrollCatalogToEnd(previousCount = 12, newCount = 5))
+        assertTrue(shouldScrollCatalogToEnd(previousCount = 12, newCount = 0))
+        assertFalse(shouldScrollCatalogToEnd(previousCount = 12, newCount = 12))
+        assertFalse(shouldScrollCatalogToEnd(previousCount = 12, newCount = 20))
+    }
+
+    @Test
+    fun emptyStateStaysVisibleWhileLoadingAnotherSelectedSeason() {
+        assertTrue(
+            shouldShowSeasonEmptyState(
+                catalogLoading = true,
+                selectedPeriod = SeasonPeriod(2028, "summer"),
+                listedSeasonEmpty = true
+            )
+        )
+        assertFalse(
+            shouldShowSeasonEmptyState(
+                catalogLoading = true,
+                selectedPeriod = null,
+                listedSeasonEmpty = true
+            )
+        )
+    }
 }

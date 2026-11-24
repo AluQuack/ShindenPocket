@@ -124,6 +124,12 @@ internal fun SeasonStartScreen(
     var moreLoading by remember { mutableStateOf(false) }
     var moreError by remember { mutableStateOf<String?>(null) }
 
+    fun preserveSeasonControlsPosition() {
+        val controls = listState.layoutInfo.visibleItemsInfo
+            .firstOrNull { it.key == "season_title" } ?: return
+        listState.requestScrollToItem(controls.index, -controls.offset)
+    }
+
     val watching = remember(library) {
         library.filter { it.watchStatus.trim().equals("in progress", ignoreCase = true) }
     }
@@ -150,10 +156,17 @@ internal fun SeasonStartScreen(
         }
         pastLoading = true
         try {
+            val previousAnimeCount = pastSeason.size
             val page = CurrentSeasonApi.fetchPage(period, 1)
+            if (shouldScrollCatalogToEnd(previousAnimeCount, page.anime.size)) {
+                preserveSeasonControlsPosition()
+            }
             pastSeason = page.anime
             pastHasMore = page.hasNextPage
-            page.latestPeriod?.let { seasonState.latestPeriod = it }
+            seasonState.latestPeriod = laterSeasonPeriod(
+                seasonState.latestPeriod,
+                page.latestPeriod
+            )
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -174,6 +187,9 @@ internal fun SeasonStartScreen(
     val canGoForward = canNavigateToNextSeason(displayedPeriod, latestPeriod)
     fun selectPeriod(period: SeasonPeriod) {
         val newPeriod = period.takeUnless { it == currentPeriod }
+        val scrollToEnd = newPeriod == null &&
+            shouldScrollCatalogToEnd(catalog.size, seasonState.season.size)
+        if (scrollToEnd) preserveSeasonControlsPosition()
         if (newPeriod != null && newPeriod != selectedPeriod) pastSeason = catalog
         selectedPeriod = newPeriod
         query = ""
@@ -536,7 +552,12 @@ internal fun SeasonStartScreen(
                 }
             }
         }
-        if (!catalogLoading && listedSeason.isEmpty()) {
+        if (shouldShowSeasonEmptyState(
+                catalogLoading = catalogLoading,
+                selectedPeriod = selectedPeriod,
+                listedSeasonEmpty = listedSeason.isEmpty()
+            )
+        ) {
             item(key = "season_empty") {
                 PocketEmptyState(
                     title = when {
@@ -706,6 +727,20 @@ internal fun canNavigateToNextSeason(
     displayedPeriod: SeasonPeriod,
     latestPeriod: SeasonPeriod
 ) = seasonPeriodIndex(shiftSeasonPeriod(displayedPeriod, 1)) <= seasonPeriodIndex(latestPeriod)
+
+internal fun laterSeasonPeriod(
+    knownPeriod: SeasonPeriod?,
+    discoveredPeriod: SeasonPeriod?
+) = listOfNotNull(knownPeriod, discoveredPeriod).maxByOrNull(::seasonPeriodIndex)
+
+internal fun shouldScrollCatalogToEnd(previousCount: Int, newCount: Int) =
+    newCount == 0 || newCount < previousCount
+
+internal fun shouldShowSeasonEmptyState(
+    catalogLoading: Boolean,
+    selectedPeriod: SeasonPeriod?,
+    listedSeasonEmpty: Boolean
+) = listedSeasonEmpty && (!catalogLoading || selectedPeriod != null)
 
 private fun seasonPeriodIndex(period: SeasonPeriod) =
     period.year * seasonSlugs.size + seasonSlugs.indexOf(period.slug)
