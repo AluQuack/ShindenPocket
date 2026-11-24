@@ -26,12 +26,18 @@ data class SavedSeason(val anime: List<SeasonAnime>, val savedAt: Long)
 
 data class SeasonPeriod(val year: Int, val slug: String)
 
-data class SeasonPage(val anime: List<SeasonAnime>, val hasNextPage: Boolean)
+data class SeasonPage(
+    val anime: List<SeasonAnime>,
+    val hasNextPage: Boolean,
+    val latestPeriod: SeasonPeriod? = null
+)
 
 object CurrentSeasonApi {
     private const val URL_CURRENT = "https://shinden.pl/series/season/current"
     private const val CACHE = "shinden_season_catalog_v1"
     private val SEASONS = listOf("winter", "spring", "summer", "autumn")
+    private val seasonPeriodPattern =
+        Regex("/series/season/([0-9]{4})/(winter|spring|summer|autumn)")
     // Endpoint `current` przekierowuje na adres zawierający rok i porę sezonu.
     private val seasonPath = Regex("^/series/season(?:/[a-z0-9-]+)+/?$")
     private val episodesPattern = Regex("([0-9]+)\\s*odc")
@@ -52,10 +58,7 @@ object CurrentSeasonApi {
         require(period.year in 1990..2100 && period.slug in SEASONS && page > 0)
         val suffix = if (page == 1) "" else "?page=$page"
         val html = downloadHtml("https://shinden.pl/series/season/${period.year}/${period.slug}$suffix")
-        parsePage(html, page).also {
-            // Pusta lista może oznaczać stronę błędu lub nierozpoznany HTML, więc nie trafia do cache.
-            if (it.anime.isEmpty()) throw IOException("Nie rozpoznano anime na stronie sezonu.")
-        }
+        parsePage(html, page)
     }
 
     /** Sezon archiwalny pobierany na żądanie; bez cache. */
@@ -93,12 +96,28 @@ object CurrentSeasonApi {
         if (byId.isEmpty()) {
             for (card in doc.select(".title.anime")) addCard(card, byId)
         }
+        if (byId.isEmpty() && !isConfirmedEmptyResult(doc.selectFirst(
+                ".sh-szukaj-wyniki[data-sh-top-obszar=wyniki]"
+            ))
+        ) {
+            throw IOException("Nie rozpoznano anime na stronie sezonu.")
+        }
         val nextPage = page + 1
         val hasNextPage = doc.select("a[href]").any {
             Regex("(?:[?&])page=([0-9]+)").find(it.attr("href"))
                 ?.groupValues?.getOrNull(1)?.toIntOrNull() == nextPage
         }
-        return SeasonPage(byId.values.toList(), hasNextPage)
+        val latestPeriod = seasonPeriodPattern.findAll(html)
+            .map { SeasonPeriod(it.groupValues[1].toInt(), it.groupValues[2]) }
+            .filter { it.year in 1990..2100 }
+            .maxByOrNull { it.year * SEASONS.size + SEASONS.indexOf(it.slug) }
+        return SeasonPage(byId.values.toList(), hasNextPage, latestPeriod)
+    }
+
+    private fun isConfirmedEmptyResult(results: Element?): Boolean {
+        if (results == null) return false
+        val count = results.selectFirst(".sh-tagi-liczba > b")?.text()?.trim()?.toIntOrNull()
+        return count == 0 && results.selectFirst(".sh-szukaj-brak") != null
     }
 
     private fun addCard(card: Element, byId: MutableMap<Int, SeasonAnime>) {

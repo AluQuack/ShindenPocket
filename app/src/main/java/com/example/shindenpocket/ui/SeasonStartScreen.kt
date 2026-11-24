@@ -42,6 +42,7 @@ import java.util.Locale
 internal class SeasonStartState {
     var season by mutableStateOf<List<SeasonAnime>>(emptyList())
     var hasMore by mutableStateOf(false)
+    var latestPeriod by mutableStateOf<SeasonPeriod?>(null)
     var loading by mutableStateOf(true)
     var cached by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
@@ -73,6 +74,7 @@ internal fun rememberSeasonStartState(
             val fresh = CurrentSeasonApi.fetchCurrentPage()
             state.season = fresh.anime
             state.hasMore = fresh.hasNextPage
+            state.latestPeriod = fresh.latestPeriod
             state.cached = false
             withContext(Dispatchers.IO) { CurrentSeasonApi.saveCached(context, fresh.anime) }
         } catch (e: CancellationException) {
@@ -108,7 +110,7 @@ internal fun SeasonStartScreen(
     var query by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
-    // null = aktualny sezon z cache; inaczej archiwalny sezon pobierany na żądanie.
+    // null = aktualny sezon z cache; inaczej wybrany sezon pobierany na żądanie.
     val currentPeriod = remember { CurrentSeasonApi.recentPeriods(1).first() }
     var selectedPeriod by remember { mutableStateOf<SeasonPeriod?>(null) }
     var pastSeason by remember { mutableStateOf<List<SeasonAnime>>(emptyList()) }
@@ -143,7 +145,7 @@ internal fun SeasonStartScreen(
         val period = selectedPeriod ?: return@LaunchedEffect
         pastError = null
         if (offlineMode) {
-            pastError = "Przeglądanie poprzednich sezonów wymaga połączenia z internetem."
+            pastError = "Przeglądanie innych sezonów wymaga połączenia z internetem."
             return@LaunchedEffect
         }
         pastLoading = true
@@ -151,6 +153,7 @@ internal fun SeasonStartScreen(
             val page = CurrentSeasonApi.fetchPage(period, 1)
             pastSeason = page.anime
             pastHasMore = page.hasNextPage
+            page.latestPeriod?.let { seasonState.latestPeriod = it }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -167,7 +170,8 @@ internal fun SeasonStartScreen(
     val periodLabel = selectedPeriod?.let(::seasonPeriodLabel)
     val displayedPeriod = selectedPeriod ?: currentPeriod
     val nextPeriod = shiftSeasonPeriod(displayedPeriod, 1)
-    val canGoForward = seasonPeriodIndex(nextPeriod) <= seasonPeriodIndex(currentPeriod)
+    val latestPeriod = seasonState.latestPeriod ?: currentPeriod
+    val canGoForward = canNavigateToNextSeason(displayedPeriod, latestPeriod)
     fun selectPeriod(period: SeasonPeriod) {
         val newPeriod = period.takeUnless { it == currentPeriod }
         if (newPeriod != null && newPeriod != selectedPeriod) pastSeason = catalog
@@ -432,7 +436,7 @@ internal fun SeasonStartScreen(
                             expanded = yearMenuOpen,
                             onDismissRequest = { yearMenuOpen = false }
                         ) {
-                            (currentPeriod.year downTo 1990).forEach { year ->
+                            (latestPeriod.year downTo 1990).forEach { year ->
                                 val selected = year == displayedPeriod.year
                                 DropdownMenuItem(
                                     text = {
@@ -446,8 +450,8 @@ internal fun SeasonStartScreen(
                                     onClick = {
                                         val period = SeasonPeriod(year, displayedPeriod.slug)
                                             .takeIf {
-                                                seasonPeriodIndex(it) <= seasonPeriodIndex(currentPeriod)
-                                            } ?: currentPeriod
+                                                seasonPeriodIndex(it) <= seasonPeriodIndex(latestPeriod)
+                                            } ?: latestPeriod
                                         selectPeriod(period)
                                         yearMenuOpen = false
                                     }
@@ -535,9 +539,18 @@ internal fun SeasonStartScreen(
         if (!catalogLoading && listedSeason.isEmpty()) {
             item(key = "season_empty") {
                 PocketEmptyState(
-                    title = if (query.isNotEmpty()) "Brak wyników w sezonie" else "Brak danych sezonu",
-                    message = if (query.isNotEmpty()) "Spróbuj wpisać inną nazwę anime."
-                    else "Odśwież dane po połączeniu z internetem.",
+                    title = when {
+                        query.isNotEmpty() -> "Brak wyników w sezonie"
+                        selectedPeriod != null && catalogError == null ->
+                            "Brak dodanych anime w tym sezonie"
+                        else -> "Brak danych sezonu"
+                    },
+                    message = when {
+                        query.isNotEmpty() -> "Spróbuj wpisać inną nazwę anime."
+                        selectedPeriod != null && catalogError == null ->
+                            "Wybierz inny sezon lub sprawdź ponownie później."
+                        else -> "Odśwież dane po połączeniu z internetem."
+                    },
                     actionLabel = if (query.isNotEmpty()) "Wyczyść wyszukiwanie" else null,
                     onAction = if (query.isNotEmpty()) ({ query = "" }) else null
                 )
@@ -688,6 +701,11 @@ internal fun shiftSeasonPeriod(period: SeasonPeriod, offset: Int): SeasonPeriod 
     val shifted = seasonPeriodIndex(period) + offset
     return SeasonPeriod(shifted / seasonSlugs.size, seasonSlugs[shifted % seasonSlugs.size])
 }
+
+internal fun canNavigateToNextSeason(
+    displayedPeriod: SeasonPeriod,
+    latestPeriod: SeasonPeriod
+) = seasonPeriodIndex(shiftSeasonPeriod(displayedPeriod, 1)) <= seasonPeriodIndex(latestPeriod)
 
 private fun seasonPeriodIndex(period: SeasonPeriod) =
     period.year * seasonSlugs.size + seasonSlugs.indexOf(period.slug)

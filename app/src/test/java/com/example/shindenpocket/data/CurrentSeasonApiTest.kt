@@ -5,6 +5,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.IOException
 
 class CurrentSeasonApiTest {
 
@@ -38,7 +39,7 @@ class CurrentSeasonApiTest {
     """.trimIndent()
 
     @Test
-    fun parsesNewSeasonLayoutWithEpisodes() {
+    fun parsesValidPopulatedSeason() {
         val result = CurrentSeasonApi.parseHtml(html)
         assertEquals(3, result.size)
 
@@ -60,6 +61,78 @@ class CurrentSeasonApiTest {
     fun detectsNextSeasonPage() {
         assertTrue(CurrentSeasonApi.parsePage(html, 1).hasNextPage)
         assertFalse(CurrentSeasonApi.parsePage(html, 2).hasNextPage)
+    }
+
+    @Test
+    fun detectsLatestSeasonListedByShinden() {
+        val page = CurrentSeasonApi.parsePage(
+            html + """<a href="/series/season/2028/autumn">Jesień 2028</a>""",
+            1
+        )
+
+        assertEquals(SeasonPeriod(2028, "autumn"), page.latestPeriod)
+    }
+
+    @Test
+    fun acceptsConfirmedEmptySeason() {
+        val page = CurrentSeasonApi.parsePage(
+            """
+                <html><body>
+                <div class="sh-szukaj-wyniki" data-sh-top-obszar="wyniki">
+                    <div class="sh-tagi-sterowanie">
+                        <span class="sh-tagi-liczba"><b>0</b> anime</span>
+                    </div>
+                    <div class="sh-szukaj-brak">
+                        <p>Nic nie pasuje do tych filtrów.</p>
+                    </div>
+                </div>
+                </body></html>
+            """.trimIndent(),
+            1
+        )
+
+        assertTrue(page.anime.isEmpty())
+    }
+
+    @Test(expected = IOException::class)
+    fun rejectsUnexpectedHtmlWithoutAnimeCards() {
+        CurrentSeasonApi.parsePage(
+            """
+                <html><body>
+                <main>Unexpected layout</main>
+                <span class="sh-tagi-liczba"><b>0</b> anime</span>
+                <div class="sh-szukaj-brak">Nic nie pasuje do tych filtrów.</div>
+                </body></html>
+            """.trimIndent(),
+            1
+        )
+    }
+
+    @Test(expected = IOException::class)
+    fun rejectsHttp200ErrorPageHtml() {
+        CurrentSeasonApi.parsePage(
+            """
+                <html>
+                <head><title>Nie ma takiej strony - Shinden.pl</title></head>
+                <body><div id="tresc">Nie znaleziono sezonu. Kod błędu: 404</div></body>
+                </html>
+            """.trimIndent(),
+            1
+        )
+    }
+
+    @Test
+    fun ignoresSeasonLinksOutsideSupportedYearRange() {
+        val page = CurrentSeasonApi.parsePage(
+            html +
+                """<a href="/series/season/1989/autumn">Jesień 1989</a>""" +
+                """<a href="/series/season/2101/winter">Zima 2101</a>""" +
+                """<a href="/series/season/9999/autumn">Jesień 9999</a>""" +
+                """<a href="/series/season/2028/autumn">Jesień 2028</a>""",
+            1
+        )
+
+        assertEquals(SeasonPeriod(2028, "autumn"), page.latestPeriod)
     }
 
     @Test
