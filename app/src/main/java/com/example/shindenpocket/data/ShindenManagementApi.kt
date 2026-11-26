@@ -480,7 +480,7 @@ object ShindenManagementApi {
         )
     }
 
-    private fun executeV1Request(
+    internal fun executeV1Request(
         method: String,
         path: String,
         body: String? = null,

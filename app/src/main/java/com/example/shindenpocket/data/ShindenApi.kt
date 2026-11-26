@@ -5,15 +5,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.IOException
-import java.net.HttpURLConnection
-import java.net.URL
 
 object ShindenApi {
 
-    private const val API_BASE =
-        "https://lista.shinden.pl/api"
-
-    
     suspend fun fetchAllAnime(userId: Int): List<Anime> =
         withContext(Dispatchers.IO) {
 
@@ -24,66 +18,41 @@ object ShindenApi {
             var offset = 0
 
             while (true) {
-
-                val url =
-                    "$API_BASE/userlist/$userId/anime" +
-                            "?limit=$limit&offset=$offset"
-
-                val connection =
-                    URL(url).openConnection() as HttpURLConnection
-
-                val response = try {
-
-                    connection.requestMethod = "GET"
-                    connection.connectTimeout = 15000
-                    connection.readTimeout = 15000
-
-                    connection.setRequestProperty(
-                        "Accept",
-                        "application/json"
-                    )
-
-                    val code = connection.responseCode
-
-                    if (code !in 200..299) {
-                        throw IOException("HTTP $code")
-                    }
-
-                    connection.inputStream
-                        .bufferedReader(Charsets.UTF_8)
-                        .use { it.readText() }
-
-                } finally {
-                    connection.disconnect()
+                val (code, response) = ShindenManagementApi.executeV1Request(
+                    method = "GET",
+                    path = "/lista/userlist/$userId/anime?limit=$limit&offset=$offset",
+                    refererPath = "/user/$userId/animelist"
+                )
+                if (code !in 200..299) {
+                    throw IOException("HTTP $code")
                 }
 
-                val json = JSONObject(response)
+                val (pageAnime, totalCount) = parseAnimePage(response)
+                allAnime.addAll(pageAnime)
+                offset += pageAnime.size
 
-                if (!json.optBoolean("success")) {
-                    throw IOException("Błąd API Shindena")
-                }
-
-                val result = json.getJSONObject("result")
-                val items = result.getJSONArray("items")
-                val totalCount = result.getInt("count")
-
-                for (i in 0 until items.length()) {
-                    val item = items.getJSONObject(i)
-                    allAnime.add(parseAnimeItem(item))
-                }
-
-                offset += items.length()
-
-                if (
-                    items.length() == 0 ||
-                    offset >= totalCount
-                ) {
+                if (pageAnime.isEmpty() || offset >= totalCount) {
                     break
                 }
             }
 
             allAnime.distinctBy { it.id }
         }
+
+    internal fun parseAnimePage(response: String): Pair<List<Anime>, Int> {
+        val json = JSONObject(response)
+        if (json.has("success") && !json.optBoolean("success")) {
+            throw IOException("Błąd API Shindena")
+        }
+
+        // Nowe /v1/lista zwraca items i count bezpośrednio; result zachowuje zgodność ze starym API.
+        val result = json.optJSONObject("result") ?: json
+        val items = result.getJSONArray("items")
+        val anime = (0 until items.length()).map { index ->
+            parseAnimeItem(items.getJSONObject(index))
+        }
+        return anime to result.getInt("count")
+    }
 
     internal fun parseAnimeItem(item: JSONObject): Anime {
         val descriptionPl = item.optString("descriptionPl", "")

@@ -13,8 +13,8 @@ android {
         applicationId = "com.example.shindenpocket"
         minSdk = 26
         targetSdk = 37
-        versionCode = 6
-        versionName = "0.3.2"
+        versionCode = 7
+        versionName = "0.3.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -53,6 +53,7 @@ dependencies {
     implementation("org.jsoup:jsoup:1.18.3")
     implementation("androidx.work:work-runtime-ktx:2.11.2")
     testImplementation(libs.junit)
+    testImplementation("org.json:json:20240303")
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)

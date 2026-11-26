@@ -36,18 +36,19 @@ data class TrackedEpisodesResult(
 object ShindenEpisodesApi {
 
     /**
-     * Pobiera katalog przez `lista.shinden.pl` i statusy ze strony `/titles/{id}/episodes`.
+     * Pobiera katalog przez `/v1/lista` i statusy ze strony `/titles/{id}/episodes`.
      * Przekierowanie do adresu ze slugiem jest dozwolone wyłącznie w domenie Shinden.
      */
     suspend fun fetchTrackedEpisodes(titleId: Int, userId: Int): TrackedEpisodesResult =
         withContext(Dispatchers.IO) {
             require(titleId > 0 && userId > 0) { "Nieprawidlowe ID anime lub uzytkownika" }
 
-            val json = downloadText(
-                URL("https://lista.shinden.pl/api/title-episodes/$titleId/$userId"),
-                accept = "application/json",
-                expectedHost = "lista.shinden.pl"
+            val (code, json) = ShindenManagementApi.executeV1Request(
+                method = "GET",
+                path = "/lista/title-episodes/$titleId/$userId",
+                refererPath = "/titles/$titleId/episodes"
             )
+            if (code !in 200..299) throw IOException("API odcinkow: HTTP $code")
             val catalog = parseCatalog(json)
 
             val firstHtml = downloadText(
@@ -167,18 +168,20 @@ object ShindenEpisodesApi {
         }
     }
 
-    private data class CatalogEpisode(
+    internal data class CatalogEpisode(
         val episodeId: Int,
         val number: String,
         val title: String,
         val watched: Boolean
     )
 
-    private fun parseCatalog(jsonText: String): List<CatalogEpisode> {
+    internal fun parseCatalog(jsonText: String): List<CatalogEpisode> {
         val json = JSONObject(jsonText)
-        if (!json.optBoolean("success")) throw IOException("API odcinkow zwrocilo success=false")
-        val items = json.optJSONObject("result")?.optJSONArray("items")
-            ?: throw IOException("Brak result.items w API")
+        if (json.has("success") && !json.optBoolean("success")) {
+            throw IOException("API odcinkow zwrocilo success=false")
+        }
+        val result = json.optJSONObject("result") ?: json
+        val items = result.optJSONArray("items") ?: throw IOException("Brak items w API")
         val episodes = mutableListOf<CatalogEpisode>()
         for (i in 0 until items.length()) {
             val ep = items.getJSONObject(i)
